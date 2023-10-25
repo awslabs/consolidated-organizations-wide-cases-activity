@@ -120,7 +120,7 @@ Verify if you have enough free SPICE Capacity in the region you want to deploy i
 4. Navigate in the directory where you cloned the repository, and then in the `cloudformation/` sub directory.
 5. Upload the content of this sub directory at the root of yourbucket.
 
-## Standard deployment
+### Standard deployment
 
 1. Open the [AWS Organizations console](https://us-east-1.console.aws.amazon.com/organizations/v2/home) in your payer account. Take note of the **Organizations ID** (o-xxxxxxxxxx) and the **Root ID** (r-yyyy). These will be used as parameters for the CloudFormation stack.
 2. Open the [AWS CloudFormation console](https://us-east-1.console.aws.amazon.com/cloudformation/home) in the region you intend to deploy the solution in (as a reminder, it has to be one of **us-east-1**, **us-west-2** or **eu-west-1**).
