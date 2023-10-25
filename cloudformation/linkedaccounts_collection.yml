@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  CentralAccountId:
+    Type: String
+  CentralAccountEventBusName:
+    Type: String
+    Default: "COCABus"
+  COCAAssumeRoleName:
+    Type: String
+    Default: "COCAAssumeRole"
+  COCACreateIAMRoles:
+    Type: String
+    AllowedValues: ["yes","no"]
+    Default: "yes"
+  COCAEventBridgeForwardRuleRoleName:
+    Type: String
+    Default: "COCAForwardRuleRole"
+
+Conditions:
+  CreateIAMRole: !Equals
+    - !Ref COCACreateIAMRoles
+    - "yes"
+
+Resources:
+  COCAAssumeRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Condition: CreateIAMRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: Policy contains actions(s) that only support * resource
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'support:DescribeCases'
+            Resource: '*'
+        Version: 2012-10-17
+      PolicyName: COCAAssumeRolePolicy-WildcardPermissions
+      Roles:
+        - Ref: COCAAssumeRole
+
+  COCAAssumeRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: IAM role requires explicit name
+    Condition: CreateIAMRole
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${CentralAccountId}:root"
+            Action:
+              - 'sts:AssumeRole'
+      RoleName: !Sub "${COCAAssumeRoleName}"
+
+  COCAEventBridgeInvokeEventBusRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: IAM role requires explicit name
+    Condition: CreateIAMRole
+    Properties:
+      RoleName: !Sub "${COCAEventBridgeForwardRuleRoleName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: COCAEventBridgeInvokeEventBusRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'events:PutEvents'
+                Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${CentralAccountId}:event-bus/${CentralAccountEventBusName}"
+  COCAEventBridgeForwardingRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Routes to AWS Support events to central account event bus
+      State: ENABLED
+      EventPattern:
+        source:
+          - 'aws.support'
+        detail-type:
+          - 'Support Case Update'
+      Targets:
+        - Arn: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${CentralAccountId}:event-bus/${CentralAccountEventBusName}"
+          Id: !Sub ${CentralAccountEventBusName}
+          RoleArn:
+            !If
+              - CreateIAMRole
+              - !GetAtt
+                - COCAEventBridgeInvokeEventBusRole
+                - Arn
+              - !Sub arn:${AWS::Partition}:iam:${AWS::Region}:${AWS::AccountId}}:role/${COCAEventBridgeForwardRuleRoleName}

@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  COCABucket:
+    Type: String
+    Description: S3 bucket were lambda.zip and stackset template are available
+    Default: "hostingstack-prod-cocaassetsbucket0c48b25b-crgyr5fbcggy"
+  COCACollectionStackSetDeployTargetsOU:
+    Type: String
+    Description: AWS Orgnizations OU for stackset deployment.
+  COCAAssumeRoleName:
+    Type: String
+    Default: "COCAAssumeRole"
+  CentralAccountId:
+    Type: String
+  CentralAccountEventBusName:
+    Type: String
+    Default: "COCABus"
+  COCAAccountMapRoleName:
+    Type: String
+    Default: "COCAAccountMapRole"
+  COCAEventBridgeForwardRuleRoleName:
+    Type: String
+    Default: "COCAForwardRuleRole"
+
+Resources:
+  COCAAssumeRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: Policy contains actions(s) that only support * resource
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'support:DescribeCases'
+            Resource: '*'
+        Version: 2012-10-17
+      PolicyName: COCAAssumeRolePolicy-WildcardPermissions
+      Roles:
+        - Ref: COCAAssumeRole
+
+  COCAAssumeRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: IAM role requires explicit name
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${CentralAccountId}:root"
+            Action:
+              - 'sts:AssumeRole'
+      RoleName: !Sub "${COCAAssumeRoleName}"
+
+  COCAAccountMapRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: Policy contains actions(s) that only support * resource
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'organizations:ListAccounts'
+              - 'organizations:DescribeOrganization'
+              - 'organizations:DescribeOrganizationalUnit'
+              - 'organizations:ListChildren'
+              - 'organizations:ListAccountsForParent'
+              - 'organizations:ListRoots'
+              - 'organizations:ListOrganizationalUnitsForParent'
+              - 'organizations:DescribeAccount'
+            Resource: '*'
+        Version: 2012-10-17
+      PolicyName: COCAAccountMapRolePolicy-WildcardPermissions
+      Roles:
+        - Ref: COCAAccountMapRole
+
+  COCAAccountMapRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: IAM role requires explicit name
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${CentralAccountId}:root"
+            Action:
+              - 'sts:AssumeRole'
+      RoleName: !Sub "${COCAAccountMapRoleName}"
+
+  COCAEventBridgeInvokeEventBusRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: COCAEventBridgeInvokeEventBusRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'events:PutEvents'
+                Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${CentralAccountId}:event-bus/${CentralAccountEventBusName}"
+
+  COCAEventBridgeForwardingRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      State: ENABLED
+      EventPattern:
+        source:
+          - 'aws.support'
+        detail-type:
+          - 'Support Case Update'
+      Targets:
+        - Arn: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${CentralAccountId}:event-bus/${CentralAccountEventBusName}"
+          Id: !Sub ${CentralAccountEventBusName}
+          RoleArn: !GetAtt
+            - COCAEventBridgeInvokeEventBusRole
+            - Arn
+
+  COCACollectionStackSet:
+    Type: 'AWS::CloudFormation::StackSet'
+    Properties:
+      StackSetName: COCAKPICollectionStackSet
+      PermissionModel: SERVICE_MANAGED
+      TemplateURL: !Sub "https://${COCABucket}.s3.amazonaws.com/linkedaccounts_collection.yml"
+      AutoDeployment:
+        Enabled: true
+        RetainStacksOnAccountRemoval: false
+      CallAs: SELF
+      Capabilities:
+        - CAPABILITY_NAMED_IAM
+      StackInstancesGroup:
+        - DeploymentTargets:
+            OrganizationalUnitIds:
+              - !Ref COCACollectionStackSetDeployTargetsOU
+          Regions:
+            - !Sub "${AWS::Region}"
+      OperationPreferences: {
+        "FailureToleranceCount": 100,
+        "MaxConcurrentPercentage": 100
+      }
+      Parameters:
+      -
+        ParameterKey: CentralAccountId
+        ParameterValue: !Ref CentralAccountId
+      -
+        ParameterKey: CentralAccountEventBusName
+        ParameterValue: !Ref CentralAccountEventBusName
+      -
+        ParameterKey: COCAAssumeRoleName
+        ParameterValue: !Ref COCAAssumeRoleName
+      -
+        ParameterKey: COCACreateIAMRoles
+        ParameterValue: "yes"
+      -
+        ParameterKey: COCAEventBridgeForwardRuleRoleName
+        ParameterValue: !Ref COCAEventBridgeForwardRuleRoleName

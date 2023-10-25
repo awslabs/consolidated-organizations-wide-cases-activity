@@ -1,0 +1,1295 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  AWSOrgId:
+    Type: CommaDelimitedList
+    Description: AWS Organizations ID
+  AthenaCatalogName:
+    Type: String
+    Description: Name of the athena data catalog
+  AthenaSpilloverBucket:
+    Type: String
+    Description: Bucket for the athena spillover
+  COCAAssumeRoleName:
+    Type: String
+  COCACreateIAMRoles:
+    Type: String
+  COCAQuicksightRegion:
+    Type: String
+  COCABucket:
+    Type: String
+  COCAEventBridgeForwardRuleRoleName:
+    Type: String
+  COCAEventBridgeInvokeRuleRoleName:
+    Type: String
+  COCAAccountMapRoleName:
+    Type: String
+  COCASeederRoleName:
+    Type: String  
+  COCAAccountMapLambdaRoleName:
+    Type: String
+  COCAPayers:
+    Type: String
+
+Conditions:
+  CreateIAMRole: !Equals
+    - !Ref COCACreateIAMRoles
+    - "yes"
+
+Resources:
+  COCAEventBus:
+    Type: 'AWS::Events::EventBus'
+    Properties:
+      Name: 'COCABus'
+
+  COCAEventBusPolicy:
+    Type: 'AWS::Events::EventBusPolicy'
+    Properties:
+      EventBusName: !Ref COCAEventBus
+      StatementId: "allow_all_linked_accounts_to_push_events"
+      Statement:
+        Sid: "allow_all_linked_accounts_to_push_events"
+        Effect: Allow
+        Action: "events:PutEvents"
+        Principal: "*"
+        Condition:
+          StringEquals:
+            aws:PrincipalOrgID: !Ref AWSOrgId
+        Resource: !GetAtt
+          - COCAEventBus
+          - Arn
+
+  COCAEventBridgeInvokeEventBusRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: IAM role requires explicit name
+    Condition: CreateIAMRole
+    Properties:
+      RoleName: !Sub "${COCAEventBridgeForwardRuleRoleName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: COCAEventBridgeInvokeEventBusRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'events:PutEvents'
+                Resource: !GetAtt
+                  - COCAEventBus
+                  - Arn
+
+  COCAEventBridgeForwardingRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      State: ENABLED
+      EventPattern:
+        source:
+          - 'aws.support'
+        detail-type:
+          - 'Support Case Update'
+      Targets:
+        - Arn: !GetAtt
+            - COCAEventBus
+            - Arn
+          Id: 'COCAEventBus'
+          RoleArn:
+            !If
+              - CreateIAMRole
+              - !GetAtt
+                - COCAEventBridgeInvokeEventBusRole
+                - Arn
+              - !Sub "arn:${AWS::Partition}:iam:${AWS::Region}:${AWS::AccountId}:role/${COCAEventBridgeInvokeRuleRoleName}"
+
+  COCALambdaExecutionRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Condition: CreateIAMRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: Policy contains actions(s) that only support * resource
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'support:DescribeCases'
+              - 'comprehend:DetectDominantLanguage'
+              - 'comprehend:DetectSentiment'
+            Resource: '*'
+        Version: 2012-10-17
+      PolicyName: COCALambdaExecutionRolePolicy-WildcardPermissions
+      Roles:
+        - Ref: COCALambdaExecutionRole
+
+  COCALambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: IAM role requires explicit name
+    Condition: CreateIAMRole
+    Properties:
+      RoleName: !Sub "${COCAEventBridgeInvokeRuleRoleName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: COCALambda2DDB
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:UpdateItem'
+                Resource: !GetAtt
+                  - COCADDBTable
+                  - Arn
+        - PolicyName: COCALambdaSTS
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource:  !Sub "arn:${AWS::Partition}:iam::*:role/${COCAAssumeRoleName}"
+        - PolicyName: COCALambdaLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*"
+
+  COCADDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: DDB table requires explicit name, referenced in Lambda code 
+    Properties:
+      TableName: "COCA"
+      BillingMode: "PAY_PER_REQUEST"
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        -
+          AttributeName: 'caseId'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'caseId'
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  COCALambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda function not accessing any private resources
+          - id: W92
+            reason: Lambda function not used to compute critical workloads and low risk of throttle
+    Properties:
+      FunctionName: COCALambda
+      Environment:
+        Variables:
+          COCAAssumeRole: !Ref COCAAssumeRoleName
+          REGION: !Ref AWS::Region
+      Architectures:
+        - arm64
+      Handler: index.lambda_handler
+      Role:
+        !If
+          - CreateIAMRole
+          - !GetAtt
+            - COCALambdaExecutionRole
+            - Arn
+          - !Sub arn:${AWS::Partition}:iam:${AWS::Region}:${AWS::AccountId}:role/${COCAAssumeRoleName}
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import datetime
+          import json
+          import os
+
+          import boto3
+
+          region = os.getenv("REGION", "us-east-1")
+          sts = boto3.client("sts", region_name=region)
+          ddb = boto3.resource("dynamodb", region_name=region)
+          comprehend = boto3.client("comprehend", region_name=region)
+          COCAAssumeRole = os.getenv("COCAAssumeRole", "COCAAssumeRole")
+          ddbTable = "COCA"
+          Sentiments = {"POSITIVE": 3, "NEUTRAL": 2, "MIXED": 1, "NEGATIVE": 0}
+
+
+          def get_privileges(aws_account, context):
+              """
+              assume role in linked account aws_account
+              return credentials
+              """
+              lambdaAccount = context.invoked_function_arn.split(":")[4]
+              if aws_account == lambdaAccount:
+                  return False
+
+              roleArn = "arn:aws:iam::" + aws_account + ":role/" + COCAAssumeRole
+              print("assuming role {}".format(roleArn))
+              assumed_role = sts.assume_role(RoleArn=roleArn, RoleSessionName="COCALambdaAssumeRole")
+              return assumed_role["Credentials"]
+
+
+          def describe_case(case_id, credentials):
+              """
+              describe case case_id using credentials
+              return case dict
+              """
+              # FIXME implement error handling in case the target account does not meet the
+              # requirement in terms of support level
+              print("describing case {}".format(case_id))
+              if credentials is False:
+                  sup = boto3.client("support")
+                  try:
+                      return sup.describe_cases(caseIdList=[case_id])["cases"][0]
+                  except:
+                      return False
+
+              ACCESS_KEY = credentials["AccessKeyId"]
+              SECRET_KEY = credentials["SecretAccessKey"]
+              SESSION_TOKEN = credentials["SessionToken"]
+              sup = boto3.client(
+                  "support",
+                  aws_access_key_id=ACCESS_KEY,
+                  aws_secret_access_key=SECRET_KEY,
+                  aws_session_token=SESSION_TOKEN,
+              )
+              try:
+                  return sup.describe_cases(caseIdList=[case_id])["cases"][0]
+              except:
+                  return False
+
+
+          def insert_in_ddb(caseDict, aws_account):
+              """
+              insert case case in ddb
+              """
+              table = ddb.Table(ddbTable)
+              caseItem={
+                      "caseId": caseDict["caseId"],
+                      "awsAccount": aws_account,
+                      "displayId": caseDict["displayId"],
+                      "subject": caseDict["subject"],
+                      "caseStatus": caseDict["status"],
+                      "serviceCode": caseDict["serviceCode"],
+                      "categoryCode": caseDict["categoryCode"],
+                      "severityCode": caseDict["severityCode"],
+                      "submittedBy": caseDict["recentCommunications"]["communications"][-1]["submittedBy"],
+                      "timeCreated": caseDict["timeCreated"],
+                      "timeLastUpdated": caseDict["recentCommunications"]["communications"][0]["timeCreated"],
+                      "lastUpdatedBy": caseDict["recentCommunications"]["communications"][0]["submittedBy"],
+                      "nbReopens": 0,
+                      "nbAWSComms": 0,
+                      "sentimentTrend": -1,
+                      "nbCustomerComms": 0,
+                      "caseLanguage": "",
+                      "rtoMet": True,
+                  }
+              if caseDict["status"] == 'resolved':
+                caseItem["timeLastResolved"] = caseDict["recentCommunications"]["communications"][0]["timeCreated"]
+              table.put_item(Item=caseItem)
+
+
+          def get_sentiment_from_message(message, language):
+              """
+              use comprehend to get sentiment from message
+              """
+              r = comprehend.detect_sentiment(Text=message, LanguageCode=language)
+              return r["Sentiment"]
+
+
+          def get_dominant_language(message):
+              """
+              use comprehend to get dominant language for message
+              """
+              r = comprehend.detect_dominant_language(Text=message)
+              return r["Languages"][0]["LanguageCode"]
+
+          def get_sentiment_trend(currentInfo,sentiment):
+            if currentInfo == -1:
+              return 0
+            if currentInfo - sentiment > 0:
+              return -1
+            elif currentInfo - sentiment < 0:
+              return 1
+            else:
+              return 0
+
+          def is_rto_met(caseDict):
+              """
+              return True if RTO is met
+              """
+              # FIXME this only takes ES RTO, not Enterprise OnRamp
+              #   for now I haven't found a way to get the support level using Support API
+              #   as a workaround we could imagine passing the Support Level via EnvironmentVariables
+              rto_times = {"low": 1440, "normal": 720, "high": 240, "urgent": 60, "critical": 15}
+              rto = rto_times[caseDict["severityCode"]]
+
+              a = caseDict["timeCreated"]
+              comms = caseDict["recentCommunications"]["communications"]
+              for comm in comms:
+                  if comm["submittedBy"] == "Amazon Web Services":
+                      da = datetime.datetime.strptime(a, "%Y-%m-%dT%H:%M:%S.%fZ")
+                      db = datetime.datetime.strptime(comm["timeCreated"], "%Y-%m-%dT%H:%M:%S.%fZ")
+                      diff = db - da
+                      print(divmod(diff.total_seconds(), 60)[0])
+                      if divmod(diff.total_seconds(), 60)[0] > rto:
+                          print(divmod(diff.total_seconds(), 60)[0])
+                          return False
+              return True
+
+
+          def update_in_ddb(caseDict, ev):
+              """
+              update case case in ddb
+              """
+              updateExpression = "set "
+              expressionAttributeValues = {}
+              table = ddb.Table(ddbTable)
+              currentInfo = table.get_item(Key={"caseId": caseDict["caseId"]})["Item"]
+
+              # if origin is set we have an AddCommunicationToCase event
+              # increment current value and build updateExpression as needed
+              if ev["origin"]:
+                  if ev["origin"] == "AWS":
+                      updateExpression += "nbAWSComms = :c,"
+                      commIncrement = currentInfo["nbAWSComms"] + 1
+                      if currentInfo["nbAWSComms"] == 0:
+                          print("verifying if we meet RTO")
+                          # this is the first message from AWS, compute RTO
+                          updateExpression += "rtoMet = :BOOL,"
+                          expressionAttributeValues[":BOOL"] = is_rto_met(caseDict)
+
+                  elif ev["origin"] == "CUSTOMER":
+                      message = caseDict["recentCommunications"]["communications"][0]["body"]
+                      updateExpression += "nbCustomerComms = :c,"
+                      commIncrement = currentInfo["nbCustomerComms"] + 1
+                      if currentInfo["caseLanguage"]:
+                          lang = currentInfo["caseLanguage"]
+                      else:
+                          lang = get_dominant_language(message)
+                          print("language is {}".format(lang))
+                      sentiment = get_sentiment_from_message(message, lang)
+                      print("sentiment is {}".format(sentiment))
+                      updateExpression += "sentiment = :S, caseLanguage = :L,"
+                      expressionAttributeValues[":S"] = Sentiments[sentiment]
+                      expressionAttributeValues[":L"] = lang
+                      if currentInfo['sentimentTrend'] != -1:
+                        updateExpression += "sentimentTrend = :ST,"
+                        expressionAttributeValues[":ST"] = get_sentiment_trend(currentInfo['sentiment'],Sentiments[sentiment])
+                  expressionAttributeValues[":c"] = commIncrement
+
+                  updateExpression += "timeLastUpdated = :t,"
+                  expressionAttributeValues[":t"] = caseDict["recentCommunications"]["communications"][0]["timeCreated"]
+                  updateExpression += "lastUpdatedBy = :u,"
+                  expressionAttributeValues[":u"] = caseDict["recentCommunications"]["communications"][0]["submittedBy"]
+
+              # we are resolving this case
+              if caseDict["status"] == "resolved":
+                  updateExpression += "timeLastResolved = :tr,"
+                  expressionAttributeValues[":tr"] = caseDict["recentCommunications"]["communications"][0]["timeCreated"]
+
+              # if we're in this function with currentInfo['status'] set to resolved,
+              # it is a case being reopened.
+              if currentInfo["caseStatus"] == "resolved":
+                  updateExpression += "nbReopens = :r,"
+                  expressionAttributeValues[":r"] = currentInfo["nbReopens"] + 1
+
+              expressionAttributeValues[":s"] = caseDict["status"]
+              table.update_item(
+                  Key={"caseId": caseDict["caseId"]},
+                  UpdateExpression=updateExpression + "caseStatus = :s",
+                  ExpressionAttributeValues=expressionAttributeValues,
+              )
+
+
+          def parse_event(event):
+              """
+              parse the even we get from eventbus
+              """
+              ev = {}
+              ev["awsAccount"] = event["account"]
+              ev["caseId"] = event["detail"]["case-id"]
+              ev["eventName"] = event["detail"]["event-name"]
+              """
+              possible event names
+                  - CreateCase
+                  - AddCommunicationToCase
+                      - happens when AWS or Customer adds communication to case, see origin
+                      - happens also when case is reopened
+                  - ResolveCase
+              """
+              ev["origin"] = event["detail"]["origin"]
+              """
+              Origin is null if even-name is not AddCommunicationToCase.
+              its value can be AWS or CUSTOMER
+              """
+              return ev
+
+
+          def lambda_handler(event, context):
+              """
+              our aptly named lambda handler
+              """
+              ev = parse_event(event)
+              print(ev)
+              aws_account = ev["awsAccount"]
+              case_id = ev["caseId"]
+              event_name = ev["eventName"]
+              c = get_privileges(aws_account, context)
+              caseDict = describe_case(case_id, c)
+              if not caseDict:
+                  return False
+              print(caseDict)
+              if event_name == "CreateCase":
+                  insert_in_ddb(caseDict, aws_account)
+              elif event_name == "AddCommunicationToCase" and ev["origin"]:
+                  update_in_ddb(caseDict, ev)
+
+  COCALambdaFunctionLogs:
+    Type: 'AWS::Logs::LogGroup'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: Lambda logs don't contain critical application data
+    Properties:
+      LogGroupName: /aws/lambda/COCALambda
+      RetentionInDays: 7
+
+  COCAEventBusRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      State: ENABLED
+      EventBusName: !GetAtt
+        - COCAEventBus
+        - Arn
+      EventPattern:
+        source:
+          - 'aws.support'
+        detail-type:
+          - 'Support Case Update'
+      Targets:
+        - Arn: !GetAtt
+            - COCALambdaFunction
+            - Arn
+          Id: "LambdaFunction4COCA"
+  PermissionForEventsToInvokeLambda:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName:
+        Ref: "COCALambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt
+          - COCAEventBusRule
+          - Arn
+
+  COCACustomResource:
+    Type: Custom::CustomResource
+    DependsOn: PermissionForEventsToInvokeLambda
+    Properties:
+      ServiceToken: !GetAtt
+        - COCASeederFunction
+        - Arn
+ 
+  COCASeederRole:
+    Type: AWS::IAM::Role
+    Condition: CreateIAMRole
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: CreateResolveCase
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                Resource: !GetAtt
+                  - COCADDBTable
+                  - Arn
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: !GetAtt
+                  - COCAAccountMapLambda
+                  - Arn
+
+  COCASeederFunction:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda function not accessing any private resources
+          - id: W92
+            reason: Lambda function not used to compute critical workloads and low risk of throttle
+    Properties:
+      Environment:
+        Variables:
+          ACCOUNT: !Ref AWS::AccountId  
+      Handler: index.handler
+      Runtime: python3.9
+      Timeout: 900
+      Role:
+        !If
+          - CreateIAMRole
+          - !GetAtt
+            - COCASeederRole
+            - Arn
+          - !Sub "arn:${AWS::Partition}:iam:${AWS::Region}:${AWS::AccountId}:role/${COCASeederRoleName}"
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import botocore
+          from botocore.config import Config
+          import os
+
+          account = os.getenv("ACCOUNT","3133731337")
+          ddb = boto3.resource('dynamodb')
+          ddbTable = "COCA"
+          def insert_case():
+              table = ddb.Table(ddbTable)
+              caseItem={
+                      'caseId': 'case-deadbeef-deadbeef',
+                      'awsAccount': account,
+                      'displayId': '3133731337',
+                      'subject': 'dummy case',
+                      'caseStatus': 'resolved',
+                      'serviceCode':'account-management',
+                      'categoryCode': 'account-verification',
+                      'severityCode': 'low',
+                      'submittedBy': 'seederFunction',
+                      'timeCreated': '2023-09-14T12:29:38.298Z',
+                      'timeLastUpdated': '2023-09-14T12:29:38.298Z',
+                      'timeLastResolved': '2023-09-14T12:29:38.298Z',
+                      'lastUpdatedBy': 'AWS',
+                      'nbReopens': 1,
+                      'nbAWSComms': 1,
+                      'nbCustomerComms': 1,
+                      'sentiment': 0,
+                      'sentimentTrend': 0,
+                      'caseLanguage': 'en',
+                      'rtoMet': True,
+                      }
+              table.put_item(Item=caseItem)
+          def handler(e,v):
+            print(e)
+            responseValue = e['ResourceProperties']
+            responseData = {}
+            responseData['Data'] = responseValue
+            if e.get('RequestType') == 'Create':
+              insert_case()
+              l = boto3.client('lambda', config=Config(tcp_keepalive=True,read_timeout=900))
+              r = l.invoke(
+                FunctionName="COCAAccountMapLambda",
+                InvocationType='RequestResponse',
+                LogType='None'
+                )
+            cfnresponse.send(e, v, cfnresponse.SUCCESS, responseData)
+
+  COCAAccountMapLambdaRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Condition: CreateIAMRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: Policy contains actions(s) that only support * resource
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+                - 'athena:StartQueryExecution'
+                - 'athena:GetDataCatalog'
+            Resource: '*'
+        Version: 2012-10-17
+      PolicyName: COCAAccountMapRolePolicy-WildcardPermissions
+      Roles:
+        - Ref: COCAAccountMapLambdaRole
+
+  COCAAccountMapLambdaRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: IAM role requires explicit name
+    Condition: CreateIAMRole
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      RoleName: !Sub "${COCAAccountMapLambdaRoleName}"
+      Policies:
+        - PolicyName: COCAAccountMapSTS
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource: !Sub "arn:${AWS::Partition}:iam::*:role/${COCAAccountMapRoleName}"
+        - PolicyName: COCAAccountMapGlue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'glue:CreateDatabase'
+                  - 'glue:GetDatabase'
+                  - 'glue:GetTable'
+                  - 'glue:CreateTable'
+                  - 'glue:UpdateTable'
+                  - 'glue:GetTable'
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                  - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/cocaaccountmap"
+                  - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/cocaaccountmap/account_map"
+        - PolicyName: COCAAccountMapS3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:GetBucketLocation'
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${AthenaSpilloverBucket}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${AthenaSpilloverBucket}"
+        - PolicyName: COCAAccountMapLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  COCAAccountMapLambda:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda function not accessing any private resources
+          - id: W92
+            reason: Lambda function not used to compute critical workloads and low risk of throttle
+    Properties:
+      FunctionName: COCAAccountMapLambda
+      Environment:
+        Variables:
+          COCAAccountMapRole: !Ref COCAAccountMapRoleName
+          COCAPayers: !Ref COCAPayers
+      Handler: index.handler
+      Runtime: python3.9
+      Timeout: 900
+      Role:
+        !If
+          - CreateIAMRole
+          - !GetAtt
+            - COCAAccountMapLambdaRole
+            - Arn
+          - !Sub arn:${AWS::Partition}:iam:${AWS::Region}:${AWS::AccountId}:role/${COCAAccountMapRoleName}
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          COCAAccountMapRole = os.getenv("COCAAccountMapRole", "COCAAccountMapRole")
+          COCAPayers = os.getenv("COCAPayers")
+
+          sts = boto3.client('sts')
+          org = boto3.client('organizations')
+          ath = boto3.client('athena')
+
+          class Account:
+              def __init__(self,Id,Name,Status,Parent,Payer):
+                  self.Id = Id
+                  self.Name = Name
+                  self.Status = Status
+                  self.Parent = Parent
+                  self.Payer = Payer
+
+          def get_root_id(payer,client):
+              '''
+              Get root ID for Organizations with payer 'payer'
+              '''
+              return client.list_roots()['Roots'][0]['Id']
+
+          def get_org_id(payer,client):
+              '''
+              Get Organizations ID for Organizations with payer 'payer'
+              '''
+              return client.describe_organization()['Organization']['Id']
+
+          def get_recursive_ous(parent, ou_list, client):
+              '''
+              Recursively an OU tree and return a list of OUs
+              '''
+              pa = client.get_paginator('list_children')
+              it = pa.paginate(ParentId=parent, ChildType='ORGANIZATIONAL_UNIT')
+              for p in it:
+                  for ou in p['Children']:
+                      ou_list.append(ou['Id'])
+                      get_recursive_ous(ou['Id'], ou_list, client)
+              return ou_list
+
+          def get_ous(parent,client):
+              '''
+              return a dict with all OUs in an AWS Organization
+              '''
+              ou_tree = {}
+              ou_list = []
+              ous = get_recursive_ous(parent, ou_list, client)
+              for ou in ous:
+                  ou_tree[ou] = []
+                  ou_tree[ou].append(client.describe_organizational_unit(OrganizationalUnitId=ou))
+              return ou_tree
+
+          def get_account_map(parent, parent_name, client,account_map, payer):
+              '''
+              get all accounts under parent 'parent'
+              return a list of accounts in 'account_nap'
+              '''
+              account_list = []
+              pa = client.get_paginator('list_accounts_for_parent')
+              it = pa.paginate(ParentId=parent)
+              for p in it:
+                  for account in p['Accounts']:
+                      account_list.append(account['Id'])
+
+              for account_id in account_list:
+                  account = client.describe_account(AccountId=account_id)['Account']
+                  account_map.append(Account(account['Id'],account['Name'],account['Status'],parent_name,payer))
+              return account_map
+
+          def create_athena_table(ath_client):
+              sql = "create database if not exists cocaaccountmap;"
+
+              response = ath_client.start_query_execution(
+                  QueryString=sql,
+                  QueryExecutionContext={
+                      'Catalog': 'AwsDataCatalog'
+                      },
+                  WorkGroup = 'COCAWorkGroup'
+                  )
+
+          def update_athena_view(account_map, ath_client):
+              '''
+              creates or update a view in Athena with the content of account_map
+              '''
+              sql = "create or replace view account_map as select * from ( values "
+              i = 0
+              for a in account_map:
+                  if i == 0:
+                      i += 1
+                      sql += "ROW ( '{0}', '{1}', '{2}', '{3}', '{4}' )\n".format(
+                              a.Id,
+                              a.Name,
+                              a.Status,
+                              a.Parent,
+                              a.Payer)
+                  else:
+                      sql += ",ROW ( '{0}', '{1}', '{2}', '{3}', '{4}' )\n".format(
+                              a.Id,
+                              a.Name,
+                              a.Status,
+                              a.Parent,
+                              a.Payer)
+              sql += ") ignored_table_name (Id, name, status, parent, payer_id)"
+              response = ath_client.start_query_execution(
+                      QueryString=sql,
+                      QueryExecutionContext={
+                          'Database': 'cocaaccountmap',
+                          'Catalog': 'AwsDataCatalog'
+                          },
+                      WorkGroup = 'COCAWorkGroup'
+                      )
+
+          def get_credentials(payer):
+              role_arn = "arn:aws:iam::"+payer+":role/"+COCAAccountMapRole
+              assumed_role = sts.assume_role(
+                      RoleArn = role_arn,
+                      RoleSessionName = "COCAAccountMapRole"
+                      )
+              return assumed_role['Credentials']
+
+          def get_clients(payer):
+              runningAccount = sts.get_caller_identity()['Account']
+              if payer == runningAccount:
+                  org = boto3.client('organizations')
+              else:
+                  creds = get_credentials(payer)
+                  org = boto3.client('organizations',
+                                     aws_access_key_id = creds['AccessKeyId'],
+                                     aws_secret_access_key = creds['SecretAccessKey'],
+                                     aws_session_token = creds['SessionToken']
+                                     )
+              return org
+
+
+          def handler(event, context):
+              account_map = []
+              for payer in COCAPayers.split(','):
+                  org_client = get_clients(payer)
+                  rootId = get_root_id(payer, org_client)
+                  ous = get_ous(rootId, org_client)
+
+                  for ou in ous.keys():
+                      ou_name = ous[ou][0]['OrganizationalUnit']['Name']
+                      account_map = get_account_map(ou, ou_name, org_client, account_map, payer)
+
+                  account_map = get_account_map(rootId, rootId, org_client, account_map, payer)
+              create_athena_table(ath)
+              update_athena_view(account_map, ath)
+
+  COCAAccountMapEventBusRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Rebuild COCA account map on a periodic basis"
+      Name: COCAAccountMapEventRule
+      State: ENABLED
+      ScheduleExpression: "rate(1 day)"
+      Targets:
+        -
+          Arn: !GetAtt
+            - COCAAccountMapLambda
+            - Arn
+          Id: "COCAAccountMapLambdaInvocation"
+
+  COCAPermissionsForEventsToInvokeAccountMapLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: "COCAAccountMapLambda"
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt
+        - COCAAccountMapEventBusRule
+        - Arn
+
+  COCAAccountMapGlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Sub "${AWS::AccountId}"
+      DatabaseInput:
+        Name: "cocaaccountmap"
+        CreateTableDefaultPermissions:
+          -
+            Permissions:
+              - "ALL"
+            Principal:
+              DataLakePrincipalIdentifier: "IAM_ALLOWED_PRINCIPALS"
+
+
+  COCAAccountMapGlueTable:
+    Type: AWS::Glue::Table
+    DependsOn: COCAAccountMapGlueDatabase
+    Properties:
+      CatalogId: !Sub "${AWS::AccountId}"
+      DatabaseName: "cocaaccountmap"
+      TableInput:
+        Name: "account_map"
+        Retention: 0
+        TableType: VIRTUAL_VIEW
+        Parameters:
+          presto_view: true
+        PartitionKeys: []
+        ViewOriginalText:
+          "Fn::Sub":
+            - "/* Presto View: ${pview} */"
+            -
+              pview:
+                "Fn::Base64": !Sub '
+                  {
+                    "catalog": "awsdatacatalog",
+                    "schema": "cocaaccountmap",
+                    "columns": [
+                      {
+                        "name": "id",
+                        "type": "varchar"
+                      },
+                      {
+                        "name": "name",
+                        "type": "varchar"
+                      },
+                      {
+                        "name": "status",
+                        "type": "varchar"
+                      },
+                      {
+                        "name": "parent",
+                        "type": "varchar"
+                      },
+                      {
+                        "name": "payer_id",
+                        "type": "varchar"
+                      }
+                    ],
+                    "originalSql": "CREATE OR REPLACE VIEW account_map AS
+                        SELECT * FROM ( VALUES
+                        ROW ( ${AWS::AccountId}, test, ACTIVE, test )
+                        )"
+                  }
+                  '
+        StorageDescriptor:
+          SerdeInfo: {}
+          Compressed: False
+          StoredAsSubDirectories: False
+          Columns:
+            -
+              Name: "id"
+              Type: "string"
+            -
+              Name: "name"
+              Type: "string"
+            -
+              Name: "status"
+              Type: "string"
+            -
+              Name: "parent"
+              Type: "string"
+            -
+              Name: "payer_id"
+              Type: "string"
+
+
+  COCAAthenaTransform:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL: !Sub "https://${COCABucket}.s3.amazonaws.com/athena_transform.yml"
+      Parameters:
+        AthenaCatalogName: !Ref AthenaCatalogName
+        AthenaSpilloverBucket: !Ref AthenaSpilloverBucket
+  COCAAthenaDataCatalog:
+    Type: 'AWS::Athena::DataCatalog'
+    DependsOn: COCACustomResource
+    Properties:
+      Name: "COCA-datasource"
+      Type: LAMBDA
+      Parameters:
+        function: !GetAtt COCAAthenaTransform.Outputs.AthenaCollectorArn
+
+  COCAAthenaWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: "COCAWorkGroup"
+      State: "ENABLED"
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaSpilloverBucket}/"
+
+  COCAQuicksightDatasource:
+    Type: AWS::QuickSight::DataSource
+    DependsOn: COCAAthenaDataCatalog
+    Properties:
+      AwsAccountId: !Sub "${AWS::AccountId}"
+      Type: "ATHENA"
+      DataSourceId: "COCA-datasource"
+      Name: "COCADataSource"
+      DataSourceParameters:
+        AthenaParameters:
+          WorkGroup: "COCAWorkGroup"
+
+  COCAQuicksightDatasourceAccountMap:
+    Type: AWS::QuickSight::DataSource
+    DependsOn: COCAAccountMapGlueTable
+    Properties:
+      AwsAccountId: !Sub "${AWS::AccountId}"
+      Type: "ATHENA"
+      DataSourceId: "COCAAccountMap"
+      Name: "COCAAccountMap"
+      DataSourceParameters:
+        AthenaParameters:
+          WorkGroup: "COCAWorkGroup"
+
+
+  COCAQuicksightDataset:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: "COCAQuicksightDataset"
+      AwsAccountId: !Sub "${AWS::AccountId}"
+      Permissions:
+        -
+          Actions:
+            - "quicksight:ListIngestions"
+            - "quicksight:DeleteDataSet"
+            - "quicksight:UpdateDataSetPermissions"
+            - "quicksight:CancelIngestion"
+            - "quicksight:DescribeDataSetPermissions"
+            - "quicksight:UpdateDataSet"
+            - "quicksight:DescribeDataSet"
+            - "quicksight:PassDataSet"
+            - "quicksight:DescribeIngestion"
+            - "quicksight:CreateIngestion"
+          Principal: !Sub "arn:${AWS::Partition}:quicksight:${COCAQuicksightRegion}:${AWS::AccountId}:group/default/COCAAdmin"
+      ImportMode: "SPICE"
+      DataSetId: "COCAQuicksightDataset"
+      PhysicalTableMap:
+        COCAAccountMapTableMap:
+          RelationalTable:
+            Catalog: "AwsDataCatalog"
+            Schema: "cocaaccountmap"
+            Name: "account_map"
+            DataSourceArn: !GetAtt
+              - COCAQuicksightDatasourceAccountMap
+              - Arn
+            InputColumns:
+              -
+                Name: "id"
+                Type: "STRING"
+              -
+                Name: "name"
+                Type: "STRING"
+              -
+                Name: "status"
+                Type: "STRING"
+              -
+                Name: "parent"
+                Type: "STRING"
+              -
+                Name: "payer_id"
+                Type: "STRING"
+        COCAPhysicalTableMap:
+          RelationalTable:
+            Schema: "default"
+            Catalog: "COCA-datasource"
+            Name: "coca"
+            DataSourceArn: !GetAtt
+              - COCAQuicksightDatasource
+              - Arn
+            InputColumns:
+              -
+                Name: "submittedBy"
+                Type: "STRING"
+              -
+                Name: "timeLastUpdated"
+                Type: "STRING"
+              -
+                Name: "lastUpdatedBy"
+                Type: "STRING"
+              -
+                Name: "nbReopens"
+                Type: "DECIMAL"
+              -
+                Name: "sentiment"
+                Type: "DECIMAL"
+              -
+                Name: "serviceCode"
+                Type: "STRING"
+              -
+                Name: "subject"
+                Type: "STRING"
+              -
+                Name: "awsAccount"
+                Type: "STRING"
+              -
+                Name: "caseStatus"
+                Type: "STRING"
+              -
+                Name: "nbCustomerComms"
+                Type: "DECIMAL"
+              -
+                Name: "categoryCode"
+                Type: "STRING"
+              -
+                Name: "nbAWSComms"
+                Type: "DECIMAL"
+              -
+                Name: "caseLanguage"
+                Type: "STRING"
+              -
+                Name: "rtoMet"
+                Type: "BOOLEAN"
+              -
+                Name: "caseId"
+                Type: "STRING"
+              -
+                Name: "sentimentTrend"
+                Type: "DECIMAL"
+              -
+                Name: "timeCreated"
+                Type: "STRING"
+              -
+                Name: "timeLastResolved"
+                Type: "STRING"
+              -
+                Name: "severityCode"
+                Type: "STRING"
+              -
+                Name: "displayId"
+                Type: "STRING"
+
+      LogicalTableMap:
+        COCALogicaTableAccountMap:
+          Alias: "account_map"
+          Source:
+            PhysicalTableId: "COCAAccountMapTableMap"
+        COCALogicalTableMap:
+          Alias: "cocatable"
+          Source:
+            PhysicalTableId: "COCAPhysicalTableMap"
+          DataTransforms:
+            -
+              CastColumnTypeOperation:
+                ColumnName: "timeCreated"
+                NewColumnType: "DATETIME"
+                Format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+            -
+              CastColumnTypeOperation:
+                ColumnName: "timeLastUpdated"
+                NewColumnType: "DATETIME"
+                Format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+            -
+              CastColumnTypeOperation:
+                ColumnName: "timeLastResolved"
+                NewColumnType: "DATETIME"
+                Format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        COCAIntermediateTable:
+          Alias: "Intermediate Table"
+          Source:
+            JoinInstruction:
+              LeftOperand: "COCALogicalTableMap"
+              RightOperand: "COCALogicaTableAccountMap"
+              Type: "LEFT"
+              OnClause: "{awsAccount} = {id}"
+          DataTransforms:
+            -
+              ProjectOperation:
+                ProjectedColumns:
+                  - "submittedBy"
+                  - "lastUpdatedBy"
+                  - "timeLastUpdated"
+                  - "timeLastResolved"
+                  - "nbReopens"
+                  - "sentiment"
+                  - "serviceCode"
+                  - "subject"
+                  - "awsAccount"
+                  - "caseStatus"
+                  - "nbCustomersComms"
+                  - "categoryCode"
+                  - "nbAWSComms"
+                  - "caseLanguage"
+                  - "rtoMet"
+                  - "caseId"
+                  - "sentimentTrend"
+                  - "timeCreated"
+                  - "severityCode"
+                  - "displayId"
+                  - "id"
+                  - "name"
+                  - "status"
+                  - "parent"
+                  - "payer_id"
+
+  COCAQuicksightDatasetRefreshSchedule:
+    Type: AWS::QuickSight::RefreshSchedule
+    DependsOn: COCAQuicksightDataset
+    Properties:
+      AwsAccountId: !Sub "${AWS::AccountId}"
+      DataSetId: "COCAQuicksightDataset"
+      Schedule:
+        RefreshType: "FULL_REFRESH"
+        ScheduleId: "COCAScheduledRefresh"
+        ScheduleFrequency:
+          Interval: "DAILY"
+          TimeOfTheDay: "04:00"
+          TimeZone: "Europe/Paris"
+
+  COCADashboard:
+    Type: AWS::QuickSight::Dashboard
+    Properties:
+      Name: "COCADashboard"
+      DashboardId: "COCADashboard"
+      AwsAccountId: !Sub "${AWS::AccountId}"
+      Permissions:
+        -
+          Actions:
+            - "quicksight:DescribeDashboard"
+            - "quicksight:ListDashboardVersions"
+            - "quicksight:UpdateDashboardPermissions"
+            - "quicksight:QueryDashboard"
+            - "quicksight:UpdateDashboard"
+            - "quicksight:DeleteDashboard"
+            - "quicksight:DescribeDashboardPermissions"
+            - "quicksight:UpdateDashboardPublishedVersion"
+          Principal: !Sub "arn:${AWS::Partition}:quicksight:${COCAQuicksightRegion}:${AWS::AccountId}:group/default/COCAAdmin"
+      SourceEntity:
+        SourceTemplate:
+          Arn: "arn:aws:quicksight:us-east-1:712283339575:template/coca-template/version/9"
+          DataSetReferences:
+            -
+              DataSetArn: !GetAtt
+                - COCAQuicksightDataset
+                - Arn
+              DataSetPlaceholder: "COCAQuicksightDataset"

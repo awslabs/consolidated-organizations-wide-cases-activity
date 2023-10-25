@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  AthenaSpilloverBucket:
+    Type: String
+    Description: The bucket where we can spill data.
+  AthenaSpilloverPrefix:
+    Type: String
+    Description: The prefix within SpillBucket where we can spill data.
+    Default: athena-spill
+  AthenaCatalogName:
+    Type: String
+    Description:  The name you will give to this catalog in Athena. It will also be
+      used as the function name. This name must satisfy the pattern ^[a-z0-9-_]{1,64}$
+    AllowedPattern: ^[a-z0-9-_]{1,64}$
+  AthenaLambdaTimeout:
+    Type: Number
+    Default: 900
+    Description: Maximum Lambda invocation runtime in seconds. (min 1 - 900 max)
+  AthenaLambdaMemory:
+    Type: Number
+    Default: 3008
+    Description: Lambda memory in MB (min 128 - 3008 max).
+  AthenaDisableSpillEncryption:
+    Type: String
+    Default: 'false'
+    Description: 'WARNING: If set to ''true'' encryption for spilled data is disabled.'
+
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  AtheneCollector:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location:
+        ApplicationId: arn:aws:serverlessrepo:us-east-1:292517598671:applications/AthenaDynamoDBConnector
+        SemanticVersion: 2022.47.1
+      Parameters:
+        AthenaCatalogName: !Ref AthenaCatalogName
+        DisableSpillEncryption: !Ref AthenaDisableSpillEncryption
+        LambdaMemory: !Ref AthenaLambdaMemory
+        LambdaTimeout: !Ref AthenaLambdaTimeout
+        SpillBucket: !Ref AthenaSpilloverBucket
+        SpillPrefix: !Ref AthenaSpilloverPrefix
+
+Outputs:
+  AthenaCollectorArn:
+    Value: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AthenaCatalogName}"
