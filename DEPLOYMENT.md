@@ -120,7 +120,7 @@ Verify if you have enough free SPICE Capacity in the region you want to deploy i
 4. Navigate in the directory where you cloned the repository, and then in the `cloudformation/` sub directory.
 5. Upload the content of this sub directory at the root of yourbucket.
 
-### Standard deployment
+## Standard deployment
 
 1. Open the [AWS Organizations console](https://us-east-1.console.aws.amazon.com/organizations/v2/home) in your payer account. Take note of the **Organizations ID** (o-xxxxxxxxxx) and the **Root ID** (r-yyyy). These will be used as parameters for the CloudFormation stack.
 2. Open the [AWS CloudFormation console](https://us-east-1.console.aws.amazon.com/cloudformation/home) in the region you intend to deploy the solution in (as a reminder, it has to be one of **us-east-1**, **us-west-2** or **eu-west-1**).
@@ -154,7 +154,7 @@ The region you deploy in must be the same for all Organizations.
 1. Open the [AWS Organizations console](https://us-east-1.console.aws.amazon.com/organizations/v2/home) in your payer account. Take note of the **Organizations ID** (o-xxxxxxxxxx) and the **Root ID** (r-yyyy). These will be used as parameters for the CloudFormation stack.
 2. Open the [AWS CloudFormation console](https://us-east-1.console.aws.amazon.com/cloudformation/home) in the region you intend to deploy the solution in (as a reminder, it has to be one of **us-east-1**, **us-west-2** or **eu-west-1**).
 3. Choose **Create stack**, then **With new resources (standard)**.
-4. Choose **Template is ready**, **Amazon S3 URL**, and input the Amazon S3 URL of the self hosted COCAstack.yml in **yourbucket**, eg: https://yourbucket.s3.amazonaws.com/COCAstack.yml.
+4. Choose **Template is ready**, **Amazon S3 URL**, and input the Amazon S3 URL of the self hosted COCAstack_leaf.yml in **yourbucket**, eg: https://yourbucket.s3.amazonaws.com/COCAstack_leaf.yml.
 5. Choose **Next**.
 6. Give the stack a name.
 7. Set **CentralAccountId** value to the AWS Account ID of your Central Account.
@@ -169,12 +169,12 @@ For each Leaf Organizations, take note of the **Organizations ID** and the **Pay
 
 #### In the Central Organizations
 
-Only proceed with this step when the deployment is done if all your AWS Organizations, as there is a Lambda backed CustomResource that will try to use a role in every Leaf Organizations' payer account during deployment. It will fail if the role does not exist.
+Only proceed with this step when the deployment is done in all your AWS Organizations, as there is a Lambda backed CustomResource that will try to use a role in every Leaf Organizations' payer account during deployment. It will fail if the role does not exist.
 
 1. Open the [AWS Organizations console](https://us-east-1.console.aws.amazon.com/organizations/v2/home) in your payer account. Take note of the **Organizations ID** (o-xxxxxxxxxx) and the **Root ID** (r-yyyy). These will be used as parameters for the CloudFormation stack.
 2. Open the [AWS CloudFormation console](https://us-east-1.console.aws.amazon.com/cloudformation/home) in the region you intend to deploy the solution in (as a reminder, it has to be one of **us-east-1**, **us-west-2** or **eu-west-1**).
 3. Choose **Create stack**, then **With new resources (standard)**.
-4. Choose **Template is ready**, **Amazon S3 URL**, and input the Amazon S3 URL of the self hosted COCAstack_morg.yml in **yourbucket**, eg: https://yourbucket.s3.amazonaws.com/COCAstack_morg.yml.
+4. Choose **Template is ready**, **Amazon S3 URL**, and input the Amazon S3 URL of the self hosted COCAstack.yml in **yourbucket**, eg: https://yourbucket.s3.amazonaws.com/COCAstack.yml.
 5. Choose **Next**.
 6. Give the stack a name.
 7. Leave all parameters to their default value, unless did not substitute  **AthenaCatalogName** with **ddbdata** in the QuickSight pre requisites about allowing QuickSight to invoke a Lambda function. If that's the case, set **AthenaCatalogName** value to the same.
