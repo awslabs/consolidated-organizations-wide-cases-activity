@@ -238,9 +238,7 @@ Resources:
       Code:
         ZipFile: |
           import datetime
-          import json
           import os
-
           import boto3
 
           region = os.getenv("REGION", "us-east-1")
@@ -262,7 +260,7 @@ Resources:
                   return False
 
               roleArn = "arn:aws:iam::" + aws_account + ":role/" + COCAAssumeRole
-              print("assuming role {}".format(roleArn))
+              print(f"assuming role {roleArn}")
               assumed_role = sts.assume_role(RoleArn=roleArn, RoleSessionName="COCALambdaAssumeRole")
               return assumed_role["Credentials"]
 
@@ -272,9 +270,7 @@ Resources:
               describe case case_id using credentials
               return case dict
               """
-              # FIXME implement error handling in case the target account does not meet the
-              # requirement in terms of support level
-              print("describing case {}".format(case_id))
+              print(f"describing case {case_id}")
               if credentials is False:
                   sup = boto3.client("support")
                   try:
@@ -323,7 +319,7 @@ Resources:
                       "rtoMet": True,
                   }
               if caseDict["status"] == 'resolved':
-                caseItem["timeLastResolved"] = caseDict["recentCommunications"]["communications"][0]["timeCreated"]
+                  caseItem["timeLastResolved"] = caseDict["recentCommunications"]["communications"][0]["timeCreated"]
               table.put_item(Item=caseItem)
 
 
@@ -343,22 +339,19 @@ Resources:
               return r["Languages"][0]["LanguageCode"]
 
           def get_sentiment_trend(currentInfo,sentiment):
-            if currentInfo == -1:
-              return 0
-            if currentInfo - sentiment > 0:
-              return -1
-            elif currentInfo - sentiment < 0:
-              return 1
-            else:
-              return 0
+              if currentInfo == -1:
+                  return 0
+              if currentInfo - sentiment > 0:
+                  return -1
+              elif currentInfo - sentiment < 0:
+                  return 1
+              else:
+                  return 0
 
           def is_rto_met(caseDict):
               """
               return True if RTO is met
               """
-              # FIXME this only takes ES RTO, not Enterprise OnRamp
-              #   for now I haven't found a way to get the support level using Support API
-              #   as a workaround we could imagine passing the Support Level via EnvironmentVariables
               rto_times = {"low": 1440, "normal": 720, "high": 240, "urgent": 60, "critical": 15}
               rto = rto_times[caseDict["severityCode"]]
 
@@ -405,15 +398,15 @@ Resources:
                           lang = currentInfo["caseLanguage"]
                       else:
                           lang = get_dominant_language(message)
-                          print("language is {}".format(lang))
+                          print(f"language is {lang}")
                       sentiment = get_sentiment_from_message(message, lang)
-                      print("sentiment is {}".format(sentiment))
+                      print(f"sentiment is {sentiment}")
                       updateExpression += "sentiment = :S, caseLanguage = :L,"
                       expressionAttributeValues[":S"] = Sentiments[sentiment]
                       expressionAttributeValues[":L"] = lang
                       if currentInfo['sentimentTrend'] != -1:
-                        updateExpression += "sentimentTrend = :ST,"
-                        expressionAttributeValues[":ST"] = get_sentiment_trend(currentInfo['sentiment'],Sentiments[sentiment])
+                          updateExpression += "sentimentTrend = :ST,"
+                          expressionAttributeValues[":ST"] = get_sentiment_trend(currentInfo['sentiment'],Sentiments[sentiment])
                   expressionAttributeValues[":c"] = commIncrement
 
                   updateExpression += "timeLastUpdated = :t,"
@@ -482,6 +475,7 @@ Resources:
                   insert_in_ddb(caseDict, aws_account)
               elif event_name == "AddCommunicationToCase" and ev["origin"]:
                   update_in_ddb(caseDict, ev)
+              return True
 
   COCALambdaFunctionLogs:
     Type: 'AWS::Logs::LogGroup'
@@ -594,11 +588,10 @@ Resources:
           - !Sub "arn:${AWS::Partition}:iam:${AWS::Region}:${AWS::AccountId}:role/${COCASeederRoleName}"
       Code:
         ZipFile: |
+          import os
           import boto3
           import cfnresponse
-          import botocore
           from botocore.config import Config
-          import os
 
           account = os.getenv("ACCOUNT","3133731337")
           ddb = boto3.resource('dynamodb')
@@ -629,19 +622,19 @@ Resources:
                       }
               table.put_item(Item=caseItem)
           def handler(e,v):
-            print(e)
-            responseValue = e['ResourceProperties']
-            responseData = {}
-            responseData['Data'] = responseValue
-            if e.get('RequestType') == 'Create':
-              insert_case()
-              l = boto3.client('lambda', config=Config(tcp_keepalive=True,read_timeout=900))
-              r = l.invoke(
-                FunctionName="COCAAccountMapLambda",
-                InvocationType='RequestResponse',
-                LogType='None'
-                )
-            cfnresponse.send(e, v, cfnresponse.SUCCESS, responseData)
+              print(e)
+              responseValue = e['ResourceProperties']
+              responseData = {}
+              responseData['Data'] = responseValue
+              if e.get('RequestType') == 'Create':
+                  insert_case()
+                  l = boto3.client('lambda', config=Config(tcp_keepalive=True,read_timeout=900))
+                  r = l.invoke(
+                    FunctionName="COCAAccountMapLambda",
+                    InvocationType='RequestResponse',
+                    LogType='None'
+                  )
+              cfnresponse.send(e, v, cfnresponse.SUCCESS, responseData)
 
   COCAAccountMapLambdaRolePolicy:
     Type: 'AWS::IAM::Policy'
@@ -759,8 +752,8 @@ Resources:
           - !Sub arn:${AWS::Partition}:iam:${AWS::Region}:${AWS::AccountId}:role/${COCAAccountMapRoleName}
       Code:
         ZipFile: |
-          import boto3
           import os
+          import boto3
 
           COCAAccountMapRole = os.getenv("COCAAccountMapRole", "COCAAccountMapRole")
           COCAPayers = os.getenv("COCAPayers")
@@ -777,17 +770,11 @@ Resources:
                   self.Parent = Parent
                   self.Payer = Payer
 
-          def get_root_id(payer,client):
+          def get_root_id(client):
               '''
               Get root ID for Organizations with payer 'payer'
               '''
               return client.list_roots()['Roots'][0]['Id']
-
-          def get_org_id(payer,client):
-              '''
-              Get Organizations ID for Organizations with payer 'payer'
-              '''
-              return client.describe_organization()['Organization']['Id']
 
           def get_recursive_ous(parent, ou_list, client):
               '''
@@ -899,7 +886,7 @@ Resources:
               account_map = []
               for payer in COCAPayers.split(','):
                   org_client = get_clients(payer)
-                  rootId = get_root_id(payer, org_client)
+                  rootId = get_root_id(org_client)
                   ous = get_ous(rootId, org_client)
 
                   for ou in ous.keys():
