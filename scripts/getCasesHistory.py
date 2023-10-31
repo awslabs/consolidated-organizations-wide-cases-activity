@@ -18,7 +18,7 @@ Sentiments = {"POSITIVE": 3, "NEUTRAL": 2, "MIXED": 1, "NEGATIVE": 0}
 def get_accounts_list(org_client):
     po = org_client.get_paginator('list_accounts')
     pi = po.paginate().build_full_result()
-    return [a['Id'] for a in pi['Accounts']]
+    return [a['Id'] for a in pi['Accounts'] if a['Status'] == 'ACTIVE']
 
 def get_support_cases_list(sup):
     ps = sup.get_paginator('describe_cases')
