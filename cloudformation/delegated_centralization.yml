@@ -327,7 +327,7 @@ Resources:
               """
               use comprehend to get sentiment from message
               """
-              r = comprehend.detect_sentiment(Text=message, LanguageCode=language)
+              r = comprehend.detect_sentiment(Text=str(message), LanguageCode=language)
               return r["Sentiment"]
 
 
@@ -335,7 +335,7 @@ Resources:
               """
               use comprehend to get dominant language for message
               """
-              r = comprehend.detect_dominant_language(Text=message)
+              r = comprehend.detect_dominant_language(Text=str(message))
               return r["Languages"][0]["LanguageCode"]
 
           def get_sentiment_trend(currentInfo,sentiment):

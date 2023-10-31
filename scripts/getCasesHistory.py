@@ -61,11 +61,11 @@ def get_last_update_info(caseDict):
     return True
 
 def get_sentiment_from_message(message, language):
-    r = comprehend.detect_sentiment(Text=message,LanguageCode=language)
+    r = comprehend.detect_sentiment(Text=str(message),LanguageCode=language)
     return r['Sentiment']
 
 def get_dominant_language(message):
-    r = comprehend.detect_dominant_language(Text=message)
+    r = comprehend.detect_dominant_language(Text=str(message))
     return r['Languages'][0]['LanguageCode']
 
 def is_rto_met(caseDict):
