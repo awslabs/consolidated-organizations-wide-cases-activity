@@ -161,7 +161,7 @@ Resources:
           Regions:
             - !Sub "${AWS::Region}"
       OperationPreferences: {
-        "FailureToleranceCount": 100,
+        "FailureTolerancePercentage": 100,
         "MaxConcurrentPercentage": 100
       }
       Parameters:
