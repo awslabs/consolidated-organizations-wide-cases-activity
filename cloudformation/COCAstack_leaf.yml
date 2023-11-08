@@ -3,7 +3,6 @@ Parameters:
   COCABucket:
     Type: String
     Description: S3 bucket were lambda.zip and stackset template are available
-    Default: "hostingstack-prod-cocaassetsbucket0c48b25b-crgyr5fbcggy"
   COCACollectionStackSetDeployTargetsOU:
     Type: String
     Description: AWS Orgnizations OU for stackset deployment.
