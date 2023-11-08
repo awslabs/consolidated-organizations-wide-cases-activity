@@ -76,7 +76,7 @@ Verify if you have enough free SPICE Capacity in the region you want to deploy i
             "Sid": "VisualEditor0",
             "Effect": "Allow",
             "Action": "lambda:InvokeFunction",
-            "Resource": "arn:aws:lambda:us-east-1:${accountid}:function:${AthenaCatalogName}"
+            "Resource": "arn:aws:lambda:${region}:${accountid}:function:${AthenaCatalogName}"
         }
     ]
 }
