@@ -66,7 +66,7 @@ Verify if you have enough free SPICE Capacity in the region you want to deploy i
 1. Open the Amazon IAM console and search the role you use for the Amazon QuickSight service. By default, it is **aws-quicksight-service-role-v0**. If you configured a different one, open it.
 2. Choose **Add permissions** then **Create inline policy**.
 3. Choose the **JSON** policy editor.
-4. Add a policy such as the one below. Make sure you substitute `${accountid}` with the AWS Account ID of your Central Account. `${AthenaCatalogName}` must be substituted with the value that you will set for the CloudFormation stack parameter of the same name. It defaults to `ddbdata` in the stack.
+4. Add a policy such as the one below. Make sure you substitute `${accountid}` with the AWS Account ID of your Central Account. `${AthenaCatalogName}` must be substituted with the value that you will set for the CloudFormation stack parameter of the same name. It defaults to `ddbdata` in the stack. `${region}` must be substituted with the name of the region in which you attempt to deploy (one of **us-east-1**, **us-west-2** or **eu-west-1**).
 
 ```
 {
