@@ -61,12 +61,18 @@ def get_last_update_info(caseDict):
     return True
 
 def get_sentiment_from_message(message, language):
-    r = comprehend.detect_sentiment(Text=str(message),LanguageCode=language)
-    return r['Sentiment']
+    if len(str(message)) > 0 and len(str(message)) < 5000:
+        r = comprehend.detect_sentiment(Text=str(message),LanguageCode=language)
+        return r['Sentiment']
+    else:
+        return 'NEUTRAL'
 
 def get_dominant_language(message):
-    r = comprehend.detect_dominant_language(Text=str(message))
-    return r['Languages'][0]['LanguageCode']
+    if len(str(message)) > 0:
+        r = comprehend.detect_dominant_language(Text=str(message))
+        return r['Languages'][0]['LanguageCode']
+    else:
+        return 'en'
 
 def is_rto_met(caseDict):
     rto_times = {

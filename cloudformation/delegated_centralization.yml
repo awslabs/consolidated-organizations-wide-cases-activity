@@ -327,16 +327,22 @@ Resources:
               """
               use comprehend to get sentiment from message
               """
-              r = comprehend.detect_sentiment(Text=str(message), LanguageCode=language)
-              return r["Sentiment"]
+              if len(str(message)) > 0 and len(str(message)) < 5000:
+                r = comprehend.detect_sentiment(Text=str(message), LanguageCode=language)
+                return r["Sentiment"]
+              else:
+                return 'NEUTRAL'
 
 
           def get_dominant_language(message):
               """
               use comprehend to get dominant language for message
               """
-              r = comprehend.detect_dominant_language(Text=str(message))
-              return r["Languages"][0]["LanguageCode"]
+              if len(str(message)) > 0 and len(str(message)) < 5000:
+                r = comprehend.detect_dominant_language(Text=str(message))
+                return r["Languages"][0]["LanguageCode"]
+              else:
+                return 'en'
 
           def get_sentiment_trend(currentInfo,sentiment):
               if currentInfo == -1:
