@@ -1273,7 +1273,7 @@ Resources:
           Principal: !Sub "arn:${AWS::Partition}:quicksight:${COCAQuicksightRegion}:${AWS::AccountId}:group/default/COCAAdmin"
       SourceEntity:
         SourceTemplate:
-          Arn: "arn:aws:quicksight:us-east-1:712283339575:template/coca-template/version/10"
+          Arn: "arn:aws:quicksight:us-east-1:712283339575:template/coca-template/version/11"
           DataSetReferences:
             -
               DataSetArn: !GetAtt
