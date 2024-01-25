@@ -68,7 +68,7 @@ def get_sentiment_from_message(message, language):
         return 'NEUTRAL'
 
 def get_dominant_language(message):
-    if len(str(message)) > 0:
+    if len(str(message)) > 0 and len(str(message)) < 5000:
         r = comprehend.detect_dominant_language(Text=str(message))
         return r['Languages'][0]['LanguageCode']
     else:
