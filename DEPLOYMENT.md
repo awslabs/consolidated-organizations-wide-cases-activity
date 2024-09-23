@@ -38,7 +38,7 @@ All the actions listed below must be done in your Central Account.
 1. Inside Amazon QuickSight, choose your profile name (upper right). Choose **Manage QuickSight**, and then choose **Security & permissions**.
 2. Choose **Add or remove**.
 3. Locate Amazon S3 in the list. If the checkbox is clear, select the checkbox next to Amazon S3. If the checkbox is selected, choose **Details**, and then choose **Select S3 buckets**.
-4. Choose your Athena Spillover bucket and select both checkboxes, the one in the **S3 bucket** column, and the one in the **Write permission for Athena Workgroup** column.
+4. Choose your Athena Spillover bucket and select both check-boxes, the one in the **S3 bucket** column, and the one in the **Write permission for Athena Workgroup** column.
 5. Choose **Finish**.
 6. Choose **Save**.
 
@@ -214,7 +214,7 @@ For a standard deployment, the following will import cases created in the last 1
 ```
 ❯ python getCasesHistory.py
 ```
-Use `-d` to control the lookback period.
+Use `-d` to control the look-back period.
 ```
 ❯ python getCasesHistory.py -d 360
 ```
